@@ -1,0 +1,340 @@
+# Further Analysis and Visualizations in R
+Lastly, I decided to analyze a few additional data files in RStudio using R. 
+First, I loaded the packages I thought I might use during my work:
+
+```{r Loading Packages}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(rmarkdown)
+library(scales)
+library(tidyr)
+library(odbc)
+library(DBI)
+library(skimr)
+library(bigrquery)
+```
+
+Then, I loaded the files I wanted to analyze:
+
+```{r Loading Files}
+OG_MinuteIntensities <- read_csv("minuteIntensitiesNarrow_merged.csv")
+OG_HeartRate <- read_csv("heartrate_seconds_merged.csv")
+OG_WeightLog <- read_csv("weightLogInfo_merged.csv")
+```
+
+Next, I checked for duplicate rows in each file by comparing total number of rows vs number of distinct rows:
+
+```{r Checking for Duplicates}
+nrow(OG_MinuteIntensities)
+nrow(unique(OG_MinuteIntensities))
+nrow(OG_HeartRate)
+nrow(unique(OG_HeartRate))
+nrow(OG_WeightLog)
+nrow(unique(OG_WeightLog))
+```
+
+Next, I wanted to get a general idea of the data contained in each file:
+
+```{r Reviewing File fields and data}
+skim(OG_MinuteIntensities)
+skim(OG_HeartRate)
+skim(OG_WeightLog)
+glimpse(OG_MinuteIntensities)
+glimpse(OG_HeartRate)
+glimpse(OG_WeightLog)
+```
+
+Initial Insights:
+
+* ID data type is matching (dbl) in all 3 files, so that is good. 
+
+* Date/Timestamps are being read as Strings - I want to change it into a DATE TIME format, will need to remove AM/PM? (all 3 files)
+
+* Intensity is coded, according to spec doc (https://www.fitabase.com/media/1930/fitabasedatadictionary102320.pdf), scale is as follows: 0=Sedentary, 1 Light, 2=Moderate, 3=VeryActive
+
+* Consider replacing intensity values with the coded value? Or, keep in numerical format so it can be analyzed as such?
+
+* Header for HR "Value" should be renamed to "Heartrate"
+
+Bringing up listing of column names for each file so I can reference them as I clean
+
+```{r}
+colnames(OG_HeartRate)
+colnames(OG_MinuteIntensities)
+colnames(OG_WeightLog)
+```
+
+Cleaning Heart Rate Data:
+```{r Cleaning HeartRate Data}
+Heartrate_v1 <- OG_HeartRate %>% 
+  rename(Participant_Id=Id) %>% 
+  rename(Heart_Rate=Value) %>% 
+  mutate(Date_Isolated=substr(Time, 1, 9)) %>% 
+  mutate(Time_Isolated=substr(Time, 11, 20)) %>% 
+  mutate(Date_Time=mdy_hms(Time)) %>% 
+  rename(OldTime=Time)
+head(Heartrate_v1)
+
+Heartrate_Cleaned <- Heartrate_v1 %>%
+  select(Participant_Id, Date_Time, Heart_Rate) %>% 
+  arrange(Participant_Id, Date_Time)
+
+head(Heartrate_Cleaned)
+
+```
+
+Cleaning Intensities Data:
+
+```{r Cleaning Intensities Data}
+Intensities_v1 <- OG_MinuteIntensities %>% 
+  rename(Participant_Id=Id) %>%
+  rename(Intensity_Level_Code=Intensity) %>% 
+  mutate(Date_Isolated=substr(ActivityMinute, 1, 9)) %>% 
+  mutate(Time_Isolated=substr(ActivityMinute, 11, 20)) %>% 
+  mutate(Date_Time=mdy_hms(ActivityMinute)) %>% 
+  mutate(
+    Intensity_Level=case_when(
+      Intensity_Level_Code == "0" ~ "Sedentary",
+      Intensity_Level_Code == "1" ~ "Light",
+      Intensity_Level_Code == "2" ~ "Moderate",
+      Intensity_Level_Code == "3" ~ "Very Active"
+    ))
+
+ActivityIntensities_Cleaned <- Intensities_v1 %>% 
+  select(Participant_Id, Date_Time, Intensity_Level, Intensity_Level_Code) %>% 
+  arrange(Participant_Id, Date_Time)
+
+
+head(ActivityIntensities_Cleaned)
+
+```
+
+Next, I was interested to see heart rate mapped alongside activity intensity for users. I hypothesized heart rate should increase as intensity increases but thought it would also be interesting if sedentary or light heart rate spikes are seen much - could indicate stress, which could be useful for marketing purposes.
+
+```{r Merging the datasets:}
+ActivityxHeartRate_Merged <- merge(
+  ActivityIntensities_Cleaned, 
+  Heartrate_Cleaned, 
+  by=c("Participant_Id", "Date_Time"))
+head(ActivityxHeartRate_Merged)
+
+```
+
+### Viz #1: Activity Intensity vs Heart Rate
+This next plot shows that Sedentary Activity seems to be weighted to lower HR (as expected), then as HR increases, the intensity gradually transitions to majority Moderate or light, then mostly Very Active at highest HR.
+
+
+However, can clearly see there are instances where sedentary, light, moderate are appearing at higher HR - worth investigating further.... 
+Calculate occurrence of HR over average during Sed or Light activity -> poss. marketing stress relief in subscription product.
+
+```{r Plot Activity Intensity vs Heart Rate}
+
+ggplot(data = ActivityxHeartRate_Merged)+
+  geom_point(mapping = aes(x = Date_Time, y = Heart_Rate, color = Intensity_Level))+
+  labs(title="Activity Intensity and Heart Rate",
+       subtitle="Participants tracked 4/12/16-5/12/16",
+       caption = "Data from https://www.kaggle.com/datasets/arashnic/fitbit",
+       x="Date", y="Heart Rate")
+
+```
+
+
+Now I wanted to dive deeper into the HRxActivity data to see if I can identify the percentage of high HR in sedentary activity. 
+According to Mayo Clinic, normal resting HR range for adults is between 60-100 bpm.(NOTE:I am making assumption survey participants were adults). 
+Since I don't have access to demographic info like ages, I can't calculate or identify normal ranges for any level of activity, even light.
+ So, I will only look at Sedentary status with > 100 HR.
+ 
+```{r Deeper Dive HR>100, Sedentary Activity}
+High_HR_while_Sedentary <- subset(ActivityxHeartRate_Merged, Heart_Rate > 100 & Intensity_Level_Code < 1)
+nrow(High_HR_while_Sedentary)
+nrow(subset(ActivityxHeartRate_Merged, Heart_Rate > 100))
+935 / 14573
+
+unique(ActivityxHeartRate_Merged$Participant_Id)
+unique(High_HR_while_Sedentary$Participant_Id)
+       
+```
+ 
+The above determined that there were 935 instances of HR>100 during Sedentary Activity levels, and 14573 total instances of HR >100. 
+So, about 6.42% of the time an individual's HR was >100, they were sedentary - this isn't a huge occurrence, but may be worth looking at this population for marketing opportunities.
+
+### Viz #2: Plotting High HR  while Sedentary
+
+```{r Plot Hight HR while Sedentary}
+ggplot(data = High_HR_while_Sedentary)+
+  geom_point(mapping=aes(x=Date_Time, y=Heart_Rate), color="purple")+
+  labs(title="Occurrences of High Heart Rate during Sedentary Activity",
+       subtitle="Participants tracked 4/12/16-5/12/16",
+       caption = "Data from https://www.kaggle.com/datasets/arashnic/fitbit",
+       x="Date", y="Heart Rate")
+```
+
+The above chart zooms in on the >100 HR occurrences during times where the individual was sedentary.
+
+Next, I switched gears and decided to review and clean the weight data. Since the data spans only a month, I didn't think there was enough time/data for meaningful weight change vs activity analysis.  Instead, I focused analysis on frequency of weight logs and how often individuals are logging weight manually vs automatically with a connected smart device.
+
+```{r Cleaning Weight Log Data}
+WeightLog_v1 <- OG_WeightLog %>% 
+  rename(Participant_Id=Id) %>%
+  mutate(Date_Isolated=substr(Date, 1, 9)) %>% 
+  mutate(Time_Isolated=substr(Date, 11, 20)) %>% 
+  mutate(Date_Time=mdy_hms(Date)) %>% 
+  rename(Weight_Lbs=WeightPounds) %>% 
+  rename(Weight_Kg=WeightKg) %>% 
+  rename(BodyFat_Percentage=Fat) %>% 
+  rename(Is_Manual_Report=IsManualReport) %>% 
+  rename(Log_Id=LogId)
+head(WeightLog_v1)
+
+WeightLog_Cleaned <- WeightLog_v1 %>% 
+  select(Participant_Id, Date_Isolated, Date_Time, Is_Manual_Report, Weight_Lbs, BMI, Log_Id) %>% 
+  arrange(Participant_Id, Date_Time)
+head(WeightLog_Cleaned)
+```
+
+Created a DF to summarize number of weight entries made for each date:
+
+```{r Number of Weight Log Entries per Date}
+Entries_By_Date_WL <- WeightLog_Cleaned %>% 
+  group_by(Date_Isolated) %>% 
+  summarize(Num_Entries=n())
+
+head(Entries_By_Date_WL)
+```
+
+Calculating some summary data points:
+
+```{r Calculating Summary Data Points}
+WeightLog_Cleaned %>% 
+  summarize(Start_Date=min(Date_Isolated), End_Date=max(Date_Isolated), Num_Participants=n_distinct(Participant_Id), Total_Entries=nrow(WeightLog_Cleaned))
+
+## Average Entries per day for the group:
+67/31
+## Average Entries per participant:
+67/8
+## Average number of days per entry for each participant:
+31/8.375
+```
+
+67 total entries over 31 days (last entry made a few days before survey span ended though the final days were still applicable to datespan) - group avg'd 2.16 entries/day; 8 unique participants; avg 8.375 total logs per participant, avg 3.7 days per participant log
+
+### Viz #3: Plotting Method of Weight Logs Frequency
+```{r Plotting Weight Logs: Data Entry Method}
+ggplot(WeightLog_Cleaned)+
+  geom_bar(mapping=aes(x=Is_Manual_Report, fill=Is_Manual_Report), show.legend = FALSE)+
+  scale_x_discrete(labels = c("FALSE" = "Automatic/Synced", "TRUE" = "Manually Entered"))+
+  labs(title="Weight Logs: Data Entry Method", 
+       subtitle="Participants tracked 4/12/16-5/12/16", 
+       caption="Data from https://www.kaggle.com/datasets/arashnic/fitbit", 
+       x="Entry Method", y="Number of Entries")
+
+```
+
+This graphic shows that entries were made manually >40 times, and were automatically synced <30 times. So, it suggests that manual entry is more frequent. However, due to limitations of this data set (low number  of participants and undetermined relevance to our target demographic), further surveys would be recommended to confirm this trend as well as search for causes. If this trend holds true, a recommendation would be to advertise connectivity between the bellabeat app and smart scales.  Internally, we would want to increase the level of connectivity as well, to support these marketing efforts.
+
+# Connecting RStudio and BigQuery
+
+I wanted to connect RStudio to BigQuery to turn one of my query results into a data frame  for further analysis in R.
+NOTE: I will be placing the R Code for this activity *outside* of the code chunks as I do not want the connection to BigQuery to be able to be executed in this document. I will add a photo of the Data Frame created through these codes as well as images of the plots created.
+
+
+<code> 
+`#Connecting RStudio to BigQuery (The project I created earlier in BigQuery is titled bbfitbit, and the dataset is titled fitabaseData):
+
+bigquery_connect <- dbConnect(bigrquery::bigquery(),
+                              project = "bbfitbit",
+                              dataset = "fitabaseData")
+
+ #Listing available tables(it prompts me to authenticte access and log in at this time):
+
+dbListTables(bigquery_connect)` </code>
+
+Next, adding one of my Previously created SQL queries in order to be able to bring results to R as dataFrames (using the Participant Activity Averages Query): 
+
+<code> 
+`#Querying BigQuery from RStudio
+Query_ParticipantActivityAverages <- odbc::dbSendQuery(
+  bigquery_connect,
+  "
+    SELECT 
+      CAST(Id AS STRING) AS Participant_Id, 
+      AVG(Calories) AS Avg_Daily_Calories,
+      Avg(TotalSteps) AS Avg_Daily_Steps, 
+      Avg(TotalDistance) AS Avg_Daily_Distance_km,
+      Avg(VeryActiveDistance) AS Avg_HA_Distance_km,
+      safe_divide((Avg(VeryActiveDistance)), Avg(TotalDistance)) * 100 AS Avg_HA_Dist_percent_Total_Dist,
+      Avg(ModeratelyActiveDistance) AS Avg_MOD_Distance_km,
+      safe_divide(Avg(ModeratelyActiveDistance), Avg(TotalDistance)) * 100 AS Avg_MOD_Dist_percent_Total_Dist,
+      Avg(LightActiveDistance) AS Avg_LA_Distance_km,
+      safe_divide(Avg(LightActiveDistance), Avg(TotalDistance)) * 100 AS Avg_LA_Dist_percent_Total_Dist,
+      Avg(SedentaryActiveDistance) AS Avg_SED_Distance_km,
+      safe_divide(Avg(SedentaryActiveDistance), Avg(TotalDistance)) * 100 AS Avg_SED_Dist_percent_Total_Dist,
+      Avg(VeryActiveMinutes+FairlyActiveMinutes+LightlyActiveMinutes+SedentaryMinutes) AS Avg_Total_Min_Tracked,
+      Avg(VeryActiveMinutes) AS Avg_HA_Min,
+      safe_divide(Avg(VeryActiveMinutes), Avg(VeryActiveMinutes+FairlyActiveMinutes+LightlyActiveMinutes+SedentaryMinutes)) * 100 AS avg_HA_Min_Percent_Total_Min,
+      Avg(FairlyActiveMinutes) AS Avg_MOD_Min,
+      safe_divide(Avg(FairlyActiveMinutes), Avg(VeryActiveMinutes+FairlyActiveMinutes+LightlyActiveMinutes+SedentaryMinutes)) * 100 AS avg_MOD_Min_Percent_Total_Min,
+      Avg(LightlyActiveMinutes) AS Avg_LA_Min,
+      safe_divide(Avg(LightlyActiveMinutes), Avg(VeryActiveMinutes+FairlyActiveMinutes+LightlyActiveMinutes+SedentaryMinutes)) * 100 AS avg_LA_Min_Percent_Total_Min,
+      Avg(SedentaryMinutes) AS Avg_SED_Min,
+      safe_divide(Avg(SedentaryMinutes), Avg(VeryActiveMinutes+FairlyActiveMinutes+LightlyActiveMinutes+SedentaryMinutes)) * 100 AS avg_SED_Min_Percent_Total_Min
+    
+    
+    FROM bbfitbit.fitabaseData.DailyActivity 
+    GROUP BY
+      Id
+  "
+  )` 
+  </code>
+
+
+Saving the result of above query into data frame:
+
+<code> 
+`#Fetching query results into RStudio DataFrame:
+
+Participant_Activity_Averages <- odbc::dbFetch(Query_ParticipantActivityAverages)` 
+</code>
+
+
+Now that I have the dataframe of results saved, I can close the connection between my BigQuery project and RStudio:
+
+
+<code> 
+`#Clearing Query and Disconnecting from BigQuery:
+rm(Query_ParticipantActivityAverages)
+dbDisconnect(bigquery_connect)
+rm(bigquery_connect)` 
+</code>
+
+
+### Plot Participant Activity Data
+
+Since I have omitted the connection and query code from the code chunks, I will also include an image of the below plots.  
+As can be expected, they both suggest that more activity tends to be positively correlated with more calories being burned. However, there does seem to be a threshold of 7-8,000 daily steps or around 5km daily distance that one needs to pass before the calorie burning relationship to activity really takes off. As such, we can include messaging in our marketing to encourage customers who wish to lose weight to challenge themselves to surpass these activity levels (and emphasize how our products can help them track progress towards these goals)
+
+
+<code> ` #Plot #1 Calories Expended vs Distance - Code:
+ggplot(Participant_Activity_Averages)+
+  geom_smooth(mapping=aes(x=Avg_Daily_Calories, y=Avg_Daily_Distance_km))+
+  labs(title="Calories Expended vs. Distance Travelled (km)", 
+       subtitle="Participants tracked 4/12/16-5/12/16", 
+       caption="Data from https://www.kaggle.com/datasets/arashnic/fitbit", 
+       x="Average Daily Calories Expended", y="Avg Daily Distance (km)")` </code>
+
+```{r R Plot: Calories Expended vs. Distance Travelled (km)}
+knitr::include_graphics("RPlots/CaloriesvsDistancekm.png")
+```
+<code>
+`#Plot #2 Calories Expended vs Step Count - Code:
+ggplot(Participant_Activity_Averages)+
+  geom_smooth(mapping=aes(x=Avg_Daily_Calories, y=Avg_Daily_Steps))+
+  labs(title="Calories Expended vs. Step Count", 
+       subtitle="Participants tracked 4/12/16-5/12/16", 
+       caption="Data from https://www.kaggle.com/datasets/arashnic/fitbit", 
+       x="Average Daily Calories Expended", y="Avg Daily Steps")`
+</code>
+```{r R Plot: Calories Expended vs. Daily Steps}
+knitr::include_graphics("RPlots/CaloriesvsSteps.png")
+```
