@@ -1,0 +1,5 @@
+# GoogleDACapstone.Bellabeat
+This is a documentation of my Capstone Project for the Google Data Analytics Certificate Course on Coursera.  Portions of this project were completed in SQL via BigQuery, R via RStudio, and Tableau via Tabeleau Public. 
+
+# Scenario Summary: 
+You are working on the marketing analyst team at Bellabeat, a high-tech manufacturer of health-focused products for women. Bellabeat is a successful small company, but they have the potential to become a larger player in the global smart device market. Urška Sršen, cofounder and Chief Creative Officer of Bellabeat, believes that analyzing smart device fitness data could help unlock new growth opportunities for the company. She has asked the marketing analytics team to focus on a Bellabeat product and analyze smart device usage data in order to gain insight into how people are already using their smart devices. Then, using this information, she would like high-level recommendations for how these trends can inform Bellabeat marketing strategy
